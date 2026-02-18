@@ -8,7 +8,7 @@ from swxsoc.util.validation import validate
 
 from swxsoc_reach import log
 from swxsoc_reach.calibration.transform import build_swxdata
-from swxsoc_reach.io.file_tools import read_udl_json
+from swxsoc_reach.io.file_tools import read_file
 
 __all__ = [
     "process_file",
@@ -19,16 +19,16 @@ def process_file(
     filename: Path,
 ) -> list[Path]:
     """
-    Process a REACH UDL JSON file into an ISTP-compliant CDF.
+    Process a REACH UDL file into an ISTP-compliant CDF.
 
-    Reads the JSON file, transforms the data into an
+    Reads the file, transforms the data into an
     :class:`~swxsoc.swxdata.SWXData` object, writes a CDF file, and
     runs ISTP validation (logging warnings on any issues without raising).
 
     Parameters
     ----------
     filename : Path
-        Path to the input UDL JSON file.
+        Path to the input UDL (JSON or CSV) file.
 
     Returns
     -------
@@ -42,7 +42,7 @@ def process_file(
     output_path = Path.cwd()
 
     # Read and transform
-    data = read_udl_json(file_path)
+    data = read_file(file_path)
     reach_data = build_swxdata(data)
 
     # Write CDF
