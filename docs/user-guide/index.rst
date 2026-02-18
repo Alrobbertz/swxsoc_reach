@@ -13,5 +13,4 @@ Note that this package is still in active development.
    :maxdepth: 2
 
    overview
-   customization
    logger
