@@ -19,7 +19,7 @@ def process_file(
     filename: Path,
 ) -> list[Path]:
     """
-    Process a REACH UDL file into an ISTP-compliant CDF.
+    Process a REACH data file from one data level to the next (e.g. UDL file to an ISTP-compliant CDF).
 
     Reads the file, transforms the data into an
     :class:`~swxsoc.swxdata.SWXData` object, writes a CDF file, and
@@ -38,6 +38,9 @@ def process_file(
     file_path = Path(filename)
     log.info(f"Processing file {file_path}.")
 
+    # Stub Output Files
+    output_files = []
+
     # Save to the working directory
     output_path = Path.cwd()
 
@@ -48,6 +51,7 @@ def process_file(
     # Write CDF
     cdf_path = reach_data.save(output_path=output_path, overwrite=True)
     log.info(f"Saved CDF to {cdf_path}")
+    output_files.append(cdf_path)
 
     # Validate (warn only, do not raise)
     try:
@@ -58,4 +62,6 @@ def process_file(
     except Exception as exc:
         log.warning(f"Validation could not complete: {exc}")
 
-    return [Path(cdf_path)]
+    # NOTE: Can add additional processing steps here if needed and return multiple output files as needed.
+
+    return output_files

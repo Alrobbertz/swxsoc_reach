@@ -286,12 +286,29 @@ def build_swxdata(
     orchestrates deduplication, metadata extraction, sparse-array
     construction, and SWXData packaging in a single call.
 
+    The returned :class:`~swxsoc.swxdata.SWXData` contains:
+
+    ========================  ==========================================
+    Variable                  Shape
+    ========================  ==========================================
+    ``Epoch``                 ``(n_times,)``
+    ``sensor_ids``            ``(n_sensors,)``
+    ``observation_flavors``   ``(n_sensors, n_flavors_max)``
+    ``observations``          ``(n_times, n_sensors, n_flavors_max)``
+    ``lat``                   ``(n_times, n_sensors)``
+    ``lon``                   ``(n_times, n_sensors)``
+    ``alt``                   ``(n_times, n_sensors)``
+    ``obQuality``             ``(n_times, n_sensors)``
+    ``senPos0``               ``(n_times, n_sensors)``
+    ``senPos1``               ``(n_times, n_sensors)``
+    ``senPos2``               ``(n_times, n_sensors)``
+    ========================  ==========================================
+
     Parameters
     ----------
     data : pd.DataFrame
         Raw (flat) DataFrame as returned by
-        :func:`~swxsoc_reach.io.file_tools.read_udl_json`.
-        Will be deduplicated internally.
+        :func:`~swxsoc_reach.io.file_tools.read_udl_json` or :func:`~swxsoc_reach.io.file_tools.read_udl_csv`.
     version : str, optional
         Data version string written into the global attributes
         (default ``"1.0.0"``).
