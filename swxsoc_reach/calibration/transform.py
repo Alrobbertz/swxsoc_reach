@@ -239,12 +239,25 @@ def build_swxdata(
     global_attrs: dict | None = None,
 ) -> SWXData:
     """
-    Assemble an :class:`~swxsoc.swxdata.SWXData` object from a deduplicated
-    REACH DataFrame.
+    Assemble an :class:`~swxsoc.swxdata.SWXData` object from a raw REACH DataFrame.
 
-    This is the main entry point for the transformation layer.  It
-    orchestrates deduplication, metadata extraction, sparse-array
-    construction, and SWXData packaging in a single call.
+    This is the main entry point for the transformation layer.  It runs
+    the following pipeline in order:
+
+    1. **Deduplicate** records via :func:`deduplicate_records`.
+    2. **Extract sensor metadata** (sensor IDs, observatory names, flavors)
+       via :func:`extract_sensor_metadata`.
+    3. **Build common time axis** from the unique UTC observation timestamps,
+       stripping any trailing ``Z`` before parsing to avoid a stack overflow
+       in astropy's recursive ISO-8601 parser for large arrays.
+    4. **Pre-compute per-sensor groupby** on a sensor-deduplicated view of
+       the data for efficient scalar-column extraction.
+    5. **Build variable dict** of :class:`~astropy.nddata.NDData` arrays
+       (observations, attitude, quality, sensor-position, and label variables).
+    6. **Seed global attributes** from :class:`~swxsoc_reach.util.schema.REACHDataSchema`
+       defaults, then overlay *version* and any caller-supplied *global_attrs*.
+    7. **Assemble and return** a :class:`~swxsoc.swxdata.SWXData` instance
+       ready to be written to CDF.
 
     The returned :class:`~swxsoc.swxdata.SWXData` contains:
 
@@ -252,8 +265,10 @@ def build_swxdata(
     Variable                  Shape
     ========================  ==========================================
     ``Epoch``                 ``(n_times,)``
+    ``Epoch_label``           ``(n_times,)``
     ``sensor_ids``            ``(n_sensors,)``
     ``observation_flavors``   ``(n_sensors, n_flavors_max)``
+    ``Flavor_label``          ``(n_flavors_max,)``
     ``observations``          ``(n_times, n_sensors, n_flavors_max)``
     ``lat``                   ``(n_times, n_sensors)``
     ``lon``                   ``(n_times, n_sensors)``
@@ -268,7 +283,8 @@ def build_swxdata(
     ----------
     data : pd.DataFrame
         Raw (flat) DataFrame as returned by
-        :func:`~swxsoc_reach.io.file_tools.read_udl_json` or :func:`~swxsoc_reach.io.file_tools.read_udl_csv`.
+        :func:`~swxsoc_reach.io.file_tools.read_udl_json` or
+        :func:`~swxsoc_reach.io.file_tools.read_udl_csv`.
     version : str, optional
         Data version string written into the global attributes
         (default ``"1.0.0"``).
@@ -289,7 +305,11 @@ def build_swxdata(
     sensor_ids, _obs_names, observation_flavors = extract_sensor_metadata(data)
 
     # --- 3. Build common time axis -------------------------------------
-    times = Time(sorted(data["obTime"].unique())).sort()
+    # Strip trailing 'Z' and pass explicit scale/format to avoid a stack
+    # overflow in astropy's recursive ISO-8601 parser for large arrays.
+    unique_times_raw = sorted(data["obTime"].unique())
+    unique_times = [t[:-1] if t.endswith("Z") else t for t in unique_times_raw]
+    times = Time(unique_times, scale="utc", format="isot").sort()
     times_pd = pd.DatetimeIndex([t.datetime for t in times]).tz_localize("UTC")
 
     ts = TimeSeries(time=times)
@@ -316,10 +336,10 @@ def build_swxdata(
                 "VAR_TYPE": "metadata",
             },
         ),
-        "Epoch_label": NDData(
-            data=np.array([t.isot for t in times]),
-            meta={"CATDESC": "Label for Epoch dimension", "VAR_TYPE": "metadata"},
-        ),
+        # "Epoch_label": NDData(
+        #     data=np.array([t.isot for t in times]),
+        #     meta={"CATDESC": "Label for Epoch dimension", "VAR_TYPE": "metadata"},
+        # ),
         "Flavor_label": NDData(
             data=np.array(
                 [f"flavor_{i}" for i in range(len(observation_flavors[0]))]
@@ -338,8 +358,8 @@ def build_swxdata(
                 "VAR_TYPE": "data",
                 "UNITS": (u.J / u.kg * 0.01).to_string(),
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
                 "LABL_PTR_3": "Flavor_label",
             },
@@ -353,8 +373,8 @@ def build_swxdata(
                 "VAR_TYPE": "data",
                 "UNITS": u.degree.to_string(),
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
@@ -367,8 +387,8 @@ def build_swxdata(
                 "VAR_TYPE": "data",
                 "UNITS": u.degree.to_string(),
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
@@ -381,8 +401,8 @@ def build_swxdata(
                 "VAR_TYPE": "data",
                 "UNITS": u.km.to_string(),
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
@@ -392,11 +412,11 @@ def build_swxdata(
             ),
             meta={
                 "CATDESC": "Observation Quality",
-                "VAR_TYPE": "data",
-                "UNITS": u.dimensionless_unscaled.to_string(),
+                "VAR_TYPE": "support_data",
+                "UNITS": "unitless",
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
@@ -406,11 +426,11 @@ def build_swxdata(
             ),
             meta={
                 "CATDESC": "Sensor Position 0",
-                "VAR_TYPE": "data",
-                "UNITS": u.dimensionless_unscaled.to_string(),
+                "VAR_TYPE": "support_data",
+                "UNITS": "unitless",
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
@@ -420,11 +440,11 @@ def build_swxdata(
             ),
             meta={
                 "CATDESC": "Sensor Position 1",
-                "VAR_TYPE": "data",
-                "UNITS": u.dimensionless_unscaled.to_string(),
+                "VAR_TYPE": "support_data",
+                "UNITS": "unitless",
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
@@ -434,11 +454,11 @@ def build_swxdata(
             ),
             meta={
                 "CATDESC": "Sensor Position 2",
-                "VAR_TYPE": "data",
-                "UNITS": u.dimensionless_unscaled.to_string(),
+                "VAR_TYPE": "support_data",
+                "UNITS": "unitless",
                 "DEPEND_0": "Epoch",
-                "DEPEND_2": "sensor_ids",
-                "LABL_PTR_1": "Epoch_label",
+                "DEPEND_1": "sensor_ids",
+                "LABL_PTR_1": "Epoch",
                 "LABL_PTR_2": "sensor_ids",
             },
         ),
