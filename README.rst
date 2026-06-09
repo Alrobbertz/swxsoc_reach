@@ -10,7 +10,7 @@ Overview
     * - docs
       - |docs| |rtd|
     * - build status
-      - |testing| |codestyle| |coverage
+      - |testing| |codestyle| |coverage|
 
 .. |rtd| image:: https://readthedocs.org/projects/swxsoc-reach/badge/?version=latest
     :target: https://swxsoc-reach.readthedocs.io/en/latest/?badge=latest
