@@ -99,7 +99,7 @@ class GenericGeoMap(SWXData):
             )
 
         # Parse out the Statistic Map for each flavor
-        # shape: (1, nflavors, lat, lon)
+        # shape: (nflavors, lat, lon)
         all_flavor_data = self[f"{statistic}_map"].data[0]
 
         # Make sure the number of flavors in the metadata matches the number of slices in the statistic map
