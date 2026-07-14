@@ -6,10 +6,11 @@ build sparse time-aligned arrays, and assemble an SWXData object
 ready for CDF output.
 """
 
+import re
+
 import astropy.units as u
 import numpy as np
 import pandas as pd
-import re
 from astropy.nddata import NDData
 from astropy.time import Time
 from astropy.timeseries import TimeSeries
@@ -285,8 +286,8 @@ def build_swxdata(
     the following pipeline in order:
 
     1. **Deduplicate** records via :func:`deduplicate_records`.
-     2. **Extract canonical sensor metadata** (all sensor IDs and fixed
-         two-slot dosimeter flavor layout)
+    2. **Extract canonical sensor metadata** (all sensor IDs and fixed
+       two-slot dosimeter flavor layout)
        via :func:`extract_sensor_metadata`.
     3. **Build common time axis** from the unique UTC observation timestamps,
        stripping any trailing ``Z`` before parsing to avoid a stack overflow
