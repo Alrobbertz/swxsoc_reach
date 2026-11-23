@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,9 @@ __all__ = [
 ]
 
 LEGACY_PIPELINE_TIME_FORMAT = "%Y%m%d"
+# Legacy pipeline CSVs (e.g. reach.20260801.vid-101.l1b.v3.csv) are processed
+# per day by swxsoc_reach.calibration.legacy.process_legacy_day, not process_file.
+LEGACY_PIPELINE_FILENAME_PATTERN = re.compile(r"^reach\.\d{8}\..+\.csv$", re.IGNORECASE)
 
 
 def load_regions(

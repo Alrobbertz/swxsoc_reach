@@ -53,6 +53,15 @@ def test_l1_process_file(this_path, tmpdir, monkeypatch):
     assert track["alt"].data.shape[1] == 32
 
 
+def test_process_file_skips_legacy_pipeline_csv(tmpdir, monkeypatch):
+    monkeypatch.chdir(tmpdir)
+    legacy_csv = _test_files_directory / "reach.20260801.vid-101.l1b.v3.csv"
+    assert legacy_csv.exists()
+
+    assert calib.process_file(legacy_csv) == []
+    assert list(Path(tmpdir).iterdir()) == []
+
+
 def test_process_file_target(tmpdir, monkeypatch):
     # Set up the temporary directory as the current working directory
     monkeypatch.chdir(tmpdir)

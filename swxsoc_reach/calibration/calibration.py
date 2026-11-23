@@ -17,6 +17,7 @@ from swxsoc_reach.io.file_tools import read_file
 from swxsoc_reach.track.trackbase import REACHTrack
 from swxsoc_reach.util.enums import Flavor
 from swxsoc_reach.util.schema import REACHDataSchema
+from swxsoc_reach.util.util import LEGACY_PIPELINE_FILENAME_PATTERN
 
 __all__ = [
     "process_file",
@@ -36,6 +37,10 @@ def process_file(
     For existing CDF files, creates one combined geomap CDF and JPG plots for
     all individual flavors (U, V, W, X, Y, Z).
 
+    Legacy pipeline CSV files (e.g. ``reach.20260801.vid-101.l1b.v3.csv``) are
+    skipped and an empty list is returned; these are processed per day by
+    :func:`~swxsoc_reach.calibration.legacy.process_legacy_day`.
+
     Parameters
     ----------
     filename : Path
@@ -47,8 +52,14 @@ def process_file(
         For UDL files: List containing the path to the output CDF file.
         For CDF files: List containing the original CDF file plus one geomap CDF
         and plot JPG files (one per flavor).
+        For Legacy pipeline CSV files: An empty list.
     """
     file_path = Path(filename)
+
+    if LEGACY_PIPELINE_FILENAME_PATTERN.match(file_path.name):
+        log.info(f"Skipping Legacy pipeline file {file_path}.")
+        return []
+
     log.info(f"Processing file {file_path}.")
 
     # Stub Output Files
