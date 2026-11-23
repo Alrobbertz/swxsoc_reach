@@ -92,7 +92,8 @@ class REACHDataSchema(SWXSchema):
         """
         Derive the ``Logical_source`` global attribute for REACH.
 
-        The logical source is the combination of the data source, data type, and instrument mode.
+        The logical source is the combination of the instrument, instrument mode,
+        data level, and data type.
 
         Parameters
         ----------
@@ -106,13 +107,16 @@ class REACHDataSchema(SWXSchema):
         """
         # Get Parts
         instrument_id = self._get_instrument_id(data)
+        data_level = self._get_data_level(data)
         data_type = self._get_data_type(data)
         data_type_short_name, _ = data_type.split(">")
         instrument_mode = self._get_instrument_mode(data)
 
         # Build Derivation
-        # reach_all_prelim
-        logical_source = f"{instrument_id}_{instrument_mode}_{data_type_short_name}"
+        # e.g. reach_all_l1c_prelim, reach_all_l1_5s, reach_all_l2_5s
+        logical_source = (
+            f"{instrument_id}_{instrument_mode}_{data_level}_{data_type_short_name}"
+        )
 
         return logical_source
 

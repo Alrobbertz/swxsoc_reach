@@ -212,8 +212,8 @@ def test_timeseries_has_region_code_column(reach_track_swx):
 @pytest.fixture
 def sparse_flavor_reach_track(reach_track_swx) -> REACHTrack:
     reach_track_swx["dosimeter_flavors"].data[:] = [
-        "DOSE1 (Flavor V) in rad/second",
-        "DOSE2 (Flavor Y) in rad/second",
+        "Flavor V",
+        "Flavor Y",
     ]
     return reach_track_swx
 

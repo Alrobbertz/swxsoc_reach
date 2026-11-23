@@ -4,8 +4,15 @@ Processing of the Aerospace Corp. "Legacy" pipeline data into REACH CDF files.
 The Legacy pipeline delivers one CSV per spacecraft per UTC day, with one row
 per ``(time, spacecraft)`` and both dosimeters on the same row. This module
 reshapes that data into the long UDL-shaped frame that
-:func:`~swxsoc_reach.calibration.transform.build_swxdata` expects, adds the
-variables that only exist in the Legacy pipeline, and writes the CDF.
+:func:`~swxsoc_reach.calibration.transform.build_swxdata` expects and writes
+two daily CDF files:
+
+- **L1** (``reach_all_l1_5s_YYYYMMDD``): the ``build_swxdata()`` variables
+  (incl. ``dose_rate``) plus housekeeping and ``lm``
+  (:func:`add_legacy_l1_variables`).
+- **L2** (``reach_all_l2_5s_YYYYMMDD``): the shared time/sensor/position
+  variables plus magnetic coordinates, region/orbit codes, and the
+  proton/electron flux and species arrays (:func:`build_legacy_l2_swxdata`).
 
 The high-level entry point is :func:`process_legacy_day`.
 """
@@ -29,6 +36,7 @@ from swxsoc_reach.calibration.transform import (
     deduplicate_records,
     extract_sensor_metadata,
     impute_sensor_metadata,
+    masked_int8_ndata,
     replace_fill_values_with_nan,
 )
 from swxsoc_reach.io.file_tools import read_legacy_pipeline_day
@@ -39,7 +47,8 @@ from swxsoc_reach.util.util import get_reachid_lut
 __all__ = [
     "re_to_km",
     "legacy_to_udl_frame",
-    "add_legacy_variables",
+    "add_legacy_l1_variables",
+    "build_legacy_l2_swxdata",
     "set_legacy_global_attributes",
     "process_legacy_day",
 ]
@@ -49,6 +58,26 @@ RE_KM = 6371.2
 
 # Values at or below this threshold are FILLVAL markers (REACH uses -1e31).
 _FILLVAL_THRESHOLD = -1e30
+
+# build_swxdata() variables copied from the L1 object into the L2 object.
+# dose_rate is intentionally L1 only.
+LEGACY_L2_SHARED_VARIABLES = (
+    "sensor_labels",
+    "sensor_ids",
+    "dosimeter_flavor_labels",
+    "dosimeter_flavor_ids",
+    "dosimeter_flavors",
+    "lat",
+    "lon",
+    "alt",
+    "obQuality",
+    "sensor_position_x",
+    "sensor_position_y",
+    "sensor_position_z",
+)
+
+# Global attributes carried from the L1 object into the L2 object.
+_LEGACY_L2_CARRIED_ATTRIBUTES = ("Data_version", "Source_pipeline", "Parents")
 
 
 def re_to_km(values: pd.Series) -> np.ndarray:
@@ -68,26 +97,6 @@ def re_to_km(values: pd.Series) -> np.ndarray:
     """
     values = values.to_numpy(dtype=float)
     return np.where(values <= _FILLVAL_THRESHOLD, values, values * RE_KM)
-
-
-def masked_int8_ndata(values: np.ndarray, meta: dict) -> NDData:
-    """
-    Wrap a float array (NaN = missing) as an int8 NDData whose missing values are masked.
-
-    Parameters
-    ----------
-    values : np.ndarray
-        Array of float values, with NaN indicating missing data.
-    meta : dict
-        Metadata dictionary to attach to the NDData object.
-
-    Returns
-    -------
-    NDData
-        An NDData object containing the int8 data and a mask for missing values.
-    """
-    mask = np.isnan(values)
-    return NDData(data=np.where(mask, 0, values).astype(np.int8), mask=mask, meta=meta)
 
 
 def legacy_to_udl_frame(df: pd.DataFrame, descriptor: str = "LEGACY") -> pd.DataFrame:
@@ -195,20 +204,69 @@ def legacy_to_udl_frame(df: pd.DataFrame, descriptor: str = "LEGACY") -> pd.Data
     return frame.sort_values(["obTime", "idSensor", "obDescription"], ignore_index=True)
 
 
-def add_legacy_variables(reach_data: SWXData, udl_frame: pd.DataFrame) -> None:
+def _prepare_legacy_axes(udl_frame: pd.DataFrame, n_times: int):
     """
-    Add the Legacy-pipeline-only variables to a ``build_swxdata()`` result.
+    Replicate the ``build_swxdata()`` preprocessing so new arrays share its exact axes.
+
+    Parameters
+    ----------
+    udl_frame : pd.DataFrame
+        The frame produced by :func:`legacy_to_udl_frame`.
+    n_times : int
+        Number of time steps in the ``SWXData`` object the arrays are added to.
+
+    Returns
+    -------
+    tuple
+        ``(data, sensor_labels, observation_flavors, times_pd, sensor_grouped,
+        sensor_deduped_dt)`` for use with ``create_sensor_array`` and
+        ``create_observation_array``.
+
+    Raises
+    ------
+    ValueError
+        If the derived time axis does not have *n_times* steps.
+    """
+    data = replace_fill_values_with_nan(udl_frame.copy())
+    data = impute_sensor_metadata(data)
+    data = deduplicate_records(data)
+
+    sensor_labels, observation_flavors = extract_sensor_metadata()
+    times_pd = pd.DatetimeIndex(
+        pd.to_datetime(sorted(data["obTime"].unique()), utc=True)
+    )
+    if len(times_pd) != n_times:
+        raise ValueError(
+            f"Time axis mismatch with reach_data: {len(times_pd)} vs "
+            f"{n_times} time steps."
+        )
+
+    sensor_deduped = data.drop_duplicates(subset=["idSensor", "obTime"], keep="first")
+    sensor_deduped_dt = pd.to_datetime(sensor_deduped["obTime"].astype(str), utc=True)
+    sensor_grouped = sensor_deduped.groupby("idSensor")
+
+    return (
+        data,
+        sensor_labels,
+        observation_flavors,
+        times_pd,
+        sensor_grouped,
+        sensor_deduped_dt,
+    )
+
+
+def add_legacy_l1_variables(reach_data: SWXData, udl_frame: pd.DataFrame) -> None:
+    """
+    Add the Legacy-only L1 variables (housekeeping and ``lm``) to a ``build_swxdata()`` result.
 
     ``build_swxdata()`` only knows about the UDL variable set. The Legacy
     columns that have no UDL equivalent are added here with
     :meth:`~swxsoc.swxdata.SWXData.add_support`, since they are
-    ``(n_times, n_sensors)`` or ``(n_times, n_sensors, 2)`` arrays indexed by
-    IDs rather than by a WCS.
+    ``(n_times, n_sensors)`` arrays indexed by IDs rather than by a WCS.
 
     The same preprocessing (fill to NaN, sensor imputation, de-duplication)
-    and the same sensor/flavor/time layout as ``build_swxdata()`` is used so
-    every new array lines up with ``Epoch``, ``sensor_ids`` and
-    ``dosimeter_flavor_ids``.
+    and the same sensor/time layout as ``build_swxdata()`` is used so every
+    new array lines up with ``Epoch`` and ``sensor_ids``.
 
     Parameters
     ----------
@@ -223,24 +281,9 @@ def add_legacy_variables(reach_data: SWXData, udl_frame: pd.DataFrame) -> None:
     ValueError
         If the time axis derived here does not match ``reach_data``.
     """
-    # Replicate the build_swxdata() preprocessing so the new arrays share its exact axes.
-    data = replace_fill_values_with_nan(udl_frame.copy())
-    data = impute_sensor_metadata(data)
-    data = deduplicate_records(data)
-
-    sensor_labels, observation_flavors = extract_sensor_metadata()
-    times_pd = pd.DatetimeIndex(
-        pd.to_datetime(sorted(data["obTime"].unique()), utc=True)
+    _, sensor_labels, _, times_pd, sensor_grouped, sensor_deduped_dt = (
+        _prepare_legacy_axes(udl_frame, len(reach_data.timeseries))
     )
-    if len(times_pd) != len(reach_data.timeseries):
-        raise ValueError(
-            f"Time axis mismatch with reach_data: {len(times_pd)} vs "
-            f"{len(reach_data.timeseries)} time steps."
-        )
-
-    sensor_deduped = data.drop_duplicates(subset=["idSensor", "obTime"], keep="first")
-    sensor_deduped_dt = pd.to_datetime(sensor_deduped["obTime"].astype(str), utc=True)
-    sensor_grouped = sensor_deduped.groupby("idSensor")
 
     # Descriptions follow TOR-2021-01076 Table 6 (REACH Level 1B Data Dictionary).
 
@@ -367,6 +410,64 @@ def add_legacy_variables(reach_data: SWXData, udl_frame: pd.DataFrame) -> None:
         ),
     )
 
+
+def build_legacy_l2_swxdata(l1_data: SWXData, udl_frame: pd.DataFrame) -> SWXData:
+    """
+    Build the Legacy L2 ``SWXData`` object from the L1 object and the UDL-shaped frame.
+
+    The L2 object shares the L1 time axis and the variables listed in
+    :data:`LEGACY_L2_SHARED_VARIABLES` (copied, not referenced). It does not
+    include ``dose_rate``, housekeeping, or ``lm``. The L2-only variables
+    (magnetic coordinates, region/orbit codes, proton/electron flux and
+    species) are added with :meth:`~swxsoc.swxdata.SWXData.add_support`.
+
+    Parameters
+    ----------
+    l1_data : SWXData
+        L1 object from ``build_swxdata(udl_frame)``. Not modified.
+    udl_frame : pd.DataFrame
+        The frame produced by :func:`legacy_to_udl_frame` that was passed to
+        ``build_swxdata()``.
+
+    Returns
+    -------
+    SWXData
+        The L2 object with ``Data_level`` ``"L2>Level 2"`` and
+        ``Data_type`` ``"5s>5 Second Cadence"``.
+
+    Raises
+    ------
+    ValueError
+        If the time axis derived here does not match ``l1_data``.
+    """
+    (
+        data,
+        sensor_labels,
+        observation_flavors,
+        times_pd,
+        sensor_grouped,
+        sensor_deduped_dt,
+    ) = _prepare_legacy_axes(udl_frame, len(l1_data.timeseries))
+
+    schema = REACHDataSchema()
+    meta = dict(schema.default_global_attributes)
+    for attr_name in _LEGACY_L2_CARRIED_ATTRIBUTES:
+        if attr_name in l1_data.meta:
+            meta[attr_name] = l1_data.meta[attr_name]
+    meta["Data_level"] = "L2>Level 2"
+    meta["Data_type"] = "5s>5 Second Cadence"
+
+    # SWXData.__init__ copies the TimeSeries and deep-copies the support dict.
+    reach_data = SWXData(
+        timeseries=l1_data.timeseries,
+        support={name: l1_data.support[name] for name in LEGACY_L2_SHARED_VARIABLES},
+        meta=meta,
+        schema=schema,
+    )
+
+    # Descriptions follow TOR-2021-01076 Table 6 (REACH Level 1B Data Dictionary).
+
+    # --- Magnetic coordinates / field ---------------------------------------------
     reach_data.add_support(
         "inv_lat",
         NDData(
@@ -698,9 +799,26 @@ def add_legacy_variables(reach_data: SWXData, udl_frame: pd.DataFrame) -> None:
         ),
     )
 
+    return reach_data
+
+
+def _save_and_validate(reach_data: SWXData, output_path: Path) -> Path:
+    """Write *reach_data* to *output_path* and log (not raise) any validation issues."""
+    cdf_path = Path(reach_data.save(output_path=output_path, overwrite=True))
+    log.info(f"Saved CDF to {cdf_path}")
+
+    try:
+        validation_errors = validate(cdf_path, schema=REACHDataSchema())
+        for err in validation_errors:
+            log.warning(f"Validation issue: {err}")
+    except Exception as exc:
+        log.warning(f"Validation could not complete: {exc}")
+
+    return cdf_path
+
 
 def set_legacy_global_attributes(reach_data: SWXData) -> None:
-    """Update the global metadata to reflect the Legacy pipeline source and cadence."""
+    """Update the L1 global metadata to reflect the Legacy pipeline source and cadence."""
     reach_data.meta["Data_level"] = "L1>Level 1"
     reach_data.meta["Data_type"] = "5s>5 Second Cadence"
     # Re-derive the dependent attributes (e.g. Logical_file_id) from the updated values.
@@ -712,14 +830,15 @@ def process_legacy_day(
     data_dir: Path,
     output_dir: Path | None = None,
     version: str = "1.0.0",
-) -> Path:
+) -> list[Path]:
     """
-    Process one UTC day of Legacy pipeline CSV files into a REACH CDF file.
+    Process one UTC day of Legacy pipeline CSV files into REACH L1 and L2 CDF files.
 
     Runs the full pipeline: read the day's per-spacecraft CSV files, reshape
-    them to the UDL layout, build the ``SWXData`` object, add the
-    Legacy-only variables, update the global attributes, write the CDF, and
-    run ISTP validation (logging warnings on any issues without raising).
+    them to the UDL layout, build the L1 ``SWXData`` object (with the
+    Legacy-only L1 variables), build the L2 ``SWXData`` object from it, write
+    both CDFs, and run ISTP validation on each (logging warnings on any
+    issues without raising).
 
     Parameters
     ----------
@@ -729,7 +848,7 @@ def process_legacy_day(
         Directory containing the Legacy CSV files for the day
         (e.g. ``reach.20260801.vid-101.l1b.v3.csv``).
     output_dir : Path, optional
-        Directory to write the CDF to. Defaults to the current working
+        Directory to write the CDFs to. Defaults to the current working
         directory.
     version : str, optional
         Data version written into the ``Data_version`` global attribute
@@ -737,8 +856,9 @@ def process_legacy_day(
 
     Returns
     -------
-    Path
-        Path to the written CDF file.
+    list[Path]
+        Paths to all files written for the day, currently the L1 and L2 CDF
+        files (in that order).
 
     Raises
     ------
@@ -759,24 +879,20 @@ def process_legacy_day(
     # to one row per (time, spacecraft, dosimeter)
     udl_frame = legacy_to_udl_frame(df)
 
-    # Build the SWXData object from the UDL frame
-    reach_data = build_swxdata(udl_frame, version=version)
-    # Add the Legacy-only variables to the SWXData object
-    add_legacy_variables(reach_data, udl_frame)
+    # Build the L1 SWXData object from the UDL frame
+    l1_data = build_swxdata(udl_frame, version=version)
+    # Add the Legacy-only L1 variables (housekeeping, lm)
+    add_legacy_l1_variables(l1_data, udl_frame)
     # Update the global attributes to reflect the Legacy pipeline source and cadence
-    set_legacy_global_attributes(reach_data)
+    set_legacy_global_attributes(l1_data)
+
+    # Build the L2 SWXData object (shared variables + L2-only variables)
+    l2_data = build_legacy_l2_swxdata(l1_data, udl_frame)
 
     output_path = Path(output_dir) if output_dir is not None else Path.cwd()
     output_path.mkdir(parents=True, exist_ok=True)
-    cdf_path = Path(reach_data.save(output_path=output_path, overwrite=True))
-    log.info(f"Saved CDF to {cdf_path}")
+    output_files = []
+    output_files.append(_save_and_validate(l1_data, output_path))
+    output_files.append(_save_and_validate(l2_data, output_path))
 
-    # Validate (warn only, do not raise)
-    try:
-        validation_errors = validate(cdf_path, schema=REACHDataSchema())
-        for err in validation_errors:
-            log.warning(f"Validation issue: {err}")
-    except Exception as exc:
-        log.warning(f"Validation could not complete: {exc}")
-
-    return cdf_path
+    return output_files

@@ -60,7 +60,7 @@ def test_build_swxdata_sets_udl_source_from_descriptor():
 
     reach_data = transform.build_swxdata(data, version="1.2.3")
 
-    assert reach_data.meta["UDL_Source"] == "QUICKLOOK"
+    assert reach_data.meta["Source_pipeline"] == "UDL_QUICKLOOK"
     assert reach_data.meta["Data_version"] == "1.2.3"
 
 
@@ -93,8 +93,8 @@ def test_build_swxdata_raises_with_multiple_descriptors():
 @pytest.mark.parametrize(
     "input_filename,expected_source",
     [
-        ("REACH-ALL_20250901T000000_20250902T000000.csv", "PROVISIONAL"),
-        ("REACH-ALL_20251205T060517_20251205T060517.csv", "QUICKLOOK"),
+        ("REACH-ALL_20250901T000000_20250902T000000.csv", "UDL_PROVISIONAL"),
+        ("REACH-ALL_20251205T060517_20251205T060517.csv", "UDL_QUICKLOOK"),
     ],
 )
 def test_build_swxdata_sets_udl_source_from_csv_fixture(
@@ -104,7 +104,7 @@ def test_build_swxdata_sets_udl_source_from_csv_fixture(
 
     reach_data = transform.build_swxdata(data)
 
-    assert reach_data.meta["UDL_Source"] == expected_source
+    assert reach_data.meta["Source_pipeline"] == expected_source
 
 
 def _make_sparse_sensor_day(sensor_rows: list[dict[str, str | float]]) -> pd.DataFrame:

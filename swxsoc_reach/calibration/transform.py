@@ -30,6 +30,7 @@ __all__ = [
     "extract_sensor_metadata",
     "create_observation_array",
     "create_sensor_array",
+    "masked_int8_ndata",
     "build_swxdata",
 ]
 
@@ -314,6 +315,30 @@ def create_sensor_array(
     return df.values.astype(dtype)
 
 
+def masked_int8_ndata(values: np.ndarray, meta: dict, fill_value: int = 0) -> NDData:
+    """
+    Wrap a float array (NaN = missing) as an int8 NDData whose missing values are masked.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Array of float values, with NaN indicating missing data.
+    meta : dict
+        Metadata dictionary to attach to the NDData object.
+    fill_value : int, optional
+        Value stored under the mask in place of NaN. Default is 0.
+
+    Returns
+    -------
+    NDData
+        An NDData object containing the int8 data and a mask for missing values.
+    """
+    mask = np.isnan(values)
+    return NDData(
+        data=np.where(mask, fill_value, values).astype(np.int8), mask=mask, meta=meta
+    )
+
+
 def build_swxdata(
     data: pd.DataFrame,
     *,
@@ -387,11 +412,6 @@ def build_swxdata(
     """
     # --- 0. Replace UDL FILLVAL with NaN -------------------------------------
     data = replace_fill_values_with_nan(data)
-
-    # We can't have NaNs in the obQuality column, because we want to cast it to uint8 for CDF output.
-    # So, we replace any NaNs in obQuality with -1 for "Missing Data".
-    # See TOR-2021-01076 for details.
-    data["obQuality"] = data["obQuality"].fillna(-1).astype(np.int8)
 
     # --- 0.5 Fix and drop NaNs in Sensor Metadata ----------------------------------------
     data = impute_sensor_metadata(data)
@@ -549,15 +569,15 @@ def build_swxdata(
                 "VALIDMAX": 850.0,
             },
         ),
-        "obQuality": NDData(
-            data=create_sensor_array(
+        "obQuality": masked_int8_ndata(
+            create_sensor_array(
                 sensor_grouped=sensor_grouped,
                 sensor_deduped_dt=sensor_deduped_dt,
                 sensor_ids=sensor_labels,
                 times_pd=times_pd,
                 col="obQuality",
-                dtype=np.int8,
             ),
+            fill_value=-1,
             meta={
                 "CATDESC": "Observation Quality",
                 "VAR_TYPE": "data",

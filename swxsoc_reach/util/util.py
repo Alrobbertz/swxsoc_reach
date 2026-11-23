@@ -198,13 +198,13 @@ def create_reach_filename(
     time_str = start_time.strftime(TIME_FORMAT)
 
     # UDL is L1C
-    # "Legacy" Pipeline is just L1
+    # "Legacy" Pipeline is L1 and L2 at a "5s" cadence, one file per day
     # for the "Legacy" pipeline data we don't want to include HHMMSS in the filename,
     # so we will only use the date portion of the time string
-    if level.lower() == "l1":
+    if level.lower() == "l1" or descriptor.lower() == "5s":
         time_str = start_time.strftime(
             LEGACY_PIPELINE_TIME_FORMAT
-        )  # Only use the date portion for legacy L1 files
+        )  # Only use the date portion for legacy daily files
 
     # Combine Parts into Filename
     filename = (
