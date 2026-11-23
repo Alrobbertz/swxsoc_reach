@@ -34,7 +34,12 @@ LEGACY_L1_CDF = _test_files_directory / "reach_all_l1_5s_20260801_v1.0.0.cdf"
 LEGACY_L2_CDF = _test_files_directory / "reach_all_l2_5s_20260801_v1.0.0.cdf"
 
 # Global attributes that depend on when / where the file was generated.
-VOLATILE_GLOBAL_ATTRIBUTES = {"Generation_date", "REACH_version", "SWxSOC_version"}
+VOLATILE_GLOBAL_ATTRIBUTES = {
+    "CDF_Lib_version",
+    "Generation_date",
+    "REACH_version",
+    "SWxSOC_version",
+}
 
 
 def _normalize(value):
